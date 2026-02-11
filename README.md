@@ -4,7 +4,7 @@ Python examples demonstrating how to use the Zenzap External Integration API.
 
 ## Overview
 
-This repository provides a Python client and examples for the [Zenzap API](https://zenzap-openapi-v2.mintlify.app/), enabling you to:
+This repository provides a Python client and examples for the [Zenzap API](https://docs.zenzap.co/), enabling you to:
 
 - Create and manage topics (group chats/channels)
 - Send messages to topics
@@ -37,7 +37,32 @@ BOT_SECRET=your_bot_secret_here
 MEMBER_IDS=member-uuid-1,member-uuid-2
 ```
 
-### 3. Run the quickstart example
+### 3. Get organization member IDs
+
+The `MEMBER_IDS` in your `.env` file are UUIDs of users in your organization. To find these IDs, use the list members endpoint:
+
+```bash
+python3 -c "
+from zenzap_client import ZenzapClient
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+client = ZenzapClient(
+    api_key=os.getenv('BOT_API_KEY'),
+    secret=os.getenv('BOT_SECRET'),
+    base_url=os.getenv('API_BASE_URL')
+)
+response = client.list_members()
+if response.success:
+    for member in response.data:
+        print(f\"{member['name']}: {member['id']}\")
+"
+```
+
+Copy the member IDs you want to use and update `MEMBER_IDS` in your `.env` file (comma-separated).
+
+### 4. Run the quickstart example
 
 ```bash
 python3 examples/01_quickstart.py
@@ -238,13 +263,13 @@ else:
 
 ## Rate Limits
 
-The API has rate limiting. Check the [official documentation](https://zenzap-openapi-v2.mintlify.app/) for current limits.
+The API has rate limiting. Check the [official documentation](https://docs.zenzap.co/) for current limits.
 
 ## Resources
 
-- [Zenzap API Documentation](https://zenzap-openapi-v2.mintlify.app/)
-- [Authentication Guide](https://zenzap-openapi-v2.mintlify.app/authentication)
-- [API Reference](https://zenzap-openapi-v2.mintlify.app/api-reference)
+- [Zenzap API Documentation](https://docs.zenzap.co/)
+- [Authentication Guide](https://docs.zenzap.co/authentication)
+- [API Reference](https://docs.zenzap.co/api-reference)
 
 ## License
 
