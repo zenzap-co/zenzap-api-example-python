@@ -267,8 +267,8 @@ The API has rate limiting. Check the [official documentation](https://docs.zenza
 
 ## Resources
 
-- [Zenzap API Documentation](https://docs.zenzap.co/)
-- [Authentication Guide](https://docs.zenzap.co/authentication)
+- [Zenzap API Documentation](https://docs.zenzap.co/api-reference/)
+- [Authentication Guide](https://docs.zenzap.co/api-reference/authentication)
 - [API Reference](https://docs.zenzap.co/api-reference)
 
 ## License
