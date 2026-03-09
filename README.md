@@ -1,4 +1,4 @@
-$$# Zenzap API Python Examples
+# Zenzap API Python Examples
 
 Python examples demonstrating how to use the Zenzap External Integration API.
 
