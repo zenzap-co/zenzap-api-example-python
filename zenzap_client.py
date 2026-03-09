@@ -200,18 +200,29 @@ class ZenzapClient:
         """
         return self._get("/v2/members/me")
 
-    def list_members(self, limit: int = 50, cursor: Optional[str] = None) -> ApiResponse:
+    def list_members(
+        self,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+        emails: Optional[list[str]] = None,
+    ) -> ApiResponse:
         """
         List all members in the organization.
 
         Args:
             limit: Maximum number of members to return (default: 50)
             cursor: Pagination cursor for next page
+            emails: Filter by email addresses (comma-separated in query)
 
         Returns:
             ApiResponse with list of members
         """
-        path = self._build_path("/v2/members", {"limit": limit, "cursor": cursor})
+        params: dict[str, Any] = {
+            "limit": limit,
+            "cursor": cursor,
+            "emails": ",".join(emails) if emails is not None else None,
+        }
+        path = self._build_path("/v2/members", params)
         return self._get(path)
 
     # =========================================================================
@@ -239,13 +250,13 @@ class ZenzapClient:
         Returns:
             ApiResponse with created topic data including id, name, createdAt
         """
-        body = {
+        body: dict[str, Any] = {
             "name": name,
             "members": members,
         }
-        if description:
+        if description is not None:
             body["description"] = description
-        if external_id:
+        if external_id is not None:
             body["externalId"] = external_id
 
         return self._post("/v2/topics", body)
@@ -407,11 +418,11 @@ class ZenzapClient:
         Returns:
             ApiResponse with message data including id, topicId, createdAt
         """
-        body = {
+        body: dict[str, Any] = {
             "topicId": topic_id,
             "text": text,
         }
-        if external_id:
+        if external_id is not None:
             body["externalId"] = external_id
 
         return self._post("/v2/messages", body)
@@ -480,17 +491,17 @@ class ZenzapClient:
         Returns:
             ApiResponse with task data including id, topicId, title, createdAt
         """
-        body = {
+        body: dict[str, Any] = {
             "topicId": topic_id,
             "title": title,
         }
-        if description:
+        if description is not None:
             body["description"] = description
-        if assignee:
+        if assignee is not None:
             body["assignee"] = assignee
         if due_date is not None:
             body["dueDate"] = due_date
-        if external_id:
+        if external_id is not None:
             body["externalId"] = external_id
 
         return self._post("/v2/tasks", body)
@@ -605,10 +616,8 @@ class ZenzapClient:
             "question": question,
             "options": options,
             "selectionType": selection_type,
+            "anonymous": anonymous,
         }
-        if anonymous:
-            body["anonymous"] = anonymous
-
         return self._post("/v2/polls", body)
 
     def vote_on_poll(self, poll_id: str, option_id: str) -> ApiResponse:
@@ -645,9 +654,10 @@ class ZenzapClient:
         Returns:
             ApiResponse with updates array and nextOffset
         """
-        params: dict[str, Any] = {"limit": limit, "timeout": timeout}
-        if offset is not None:
-            params["offset"] = offset
-
+        params: dict[str, Any] = {
+            "limit": limit,
+            "timeout": timeout,
+            "offset": offset,
+        }
         path = self._build_path("/v2/updates", params)
         return self._get(path)
