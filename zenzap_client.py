@@ -8,6 +8,7 @@ Handles authentication, HMAC signature generation, and API requests.
 import hashlib
 import hmac
 import json
+import time
 from typing import Any, Optional
 from dataclasses import dataclass
 from urllib.parse import quote, urlencode
@@ -92,34 +93,27 @@ class ZenzapClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-    def _generate_signature(self, data: str) -> str:
+    def _generate_signature(self, data: str, timestamp: int) -> str:
         """
         Generate HMAC-SHA256 signature for request authentication.
 
-        For GET requests: sign the full request path (including query string)
-        For POST/PATCH/DELETE: sign the JSON request body
+        The signed payload is "{timestamp}.{data}" where data is:
+        - GET requests: the full request path (including query string)
+        - POST/PATCH/DELETE: the JSON request body
 
         Args:
             data: The data to sign (path for GET, body for POST/PATCH/DELETE)
+            timestamp: Unix timestamp in milliseconds
 
         Returns:
             Hex-encoded HMAC-SHA256 signature
         """
+        payload = f"{timestamp}.{data}"
         return hmac.new(
             self.secret.encode("utf-8"),
-            data.encode("utf-8"),
+            payload.encode("utf-8"),
             hashlib.sha256
         ).hexdigest()
-
-    def _get_headers(self, signature: str, include_content_type: bool = False) -> dict:
-        """Build request headers with authentication."""
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "X-Signature": signature,
-        }
-        if include_content_type:
-            headers["Content-Type"] = "application/json"
-        return headers
 
     @staticmethod
     def _build_path(path: str, params: Optional[dict[str, Any]] = None) -> str:
@@ -133,106 +127,65 @@ class ZenzapClient:
         )
         return f"{path}?{query}" if query else path
 
-    def _get(self, path: str) -> ApiResponse:
+    def _request(self, method: str, path: str, body: Optional[dict] = None) -> ApiResponse:
         """
-        Make a GET request to the API.
+        Make an authenticated request to the API.
+
+        Handles timestamp generation, HMAC signature, and headers for all methods.
 
         Args:
+            method: HTTP method (GET, POST, PATCH, DELETE)
             path: API path (e.g., "/v2/topics")
+            body: Request body as dictionary (for POST/PATCH/DELETE)
 
         Returns:
             ApiResponse with status and data
         """
-        signature = self._generate_signature(path)
+        timestamp = int(time.time() * 1000)
         url = f"{self.base_url}{path}"
 
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "X-Timestamp": str(timestamp),
+        }
+
+        if body is not None:
+            body_str = json.dumps(body, separators=(",", ":"))
+            signature = self._generate_signature(body_str, timestamp)
+            headers["X-Signature"] = signature
+            headers["Content-Type"] = "application/json"
+        else:
+            body_str = None
+            signature = self._generate_signature(path, timestamp)
+            headers["X-Signature"] = signature
+
         try:
-            response = requests.get(
+            response = requests.request(
+                method,
                 url,
-                headers=self._get_headers(signature),
+                headers=headers,
+                data=body_str,
                 timeout=self.timeout,
             )
             return ApiResponse.from_response(response)
         except requests.RequestException as exception:
             return ApiResponse.from_exception(exception)
+
+    def _get(self, path: str) -> ApiResponse:
+        """Make a GET request to the API."""
+        return self._request("GET", path)
 
     def _post(self, path: str, body: dict) -> ApiResponse:
-        """
-        Make a POST request to the API.
-
-        Args:
-            path: API path (e.g., "/v2/topics")
-            body: Request body as dictionary
-
-        Returns:
-            ApiResponse with status and data
-        """
-        body_str = json.dumps(body, separators=(",", ":"))
-        signature = self._generate_signature(body_str)
-        url = f"{self.base_url}{path}"
-
-        try:
-            response = requests.post(
-                url,
-                headers=self._get_headers(signature, include_content_type=True),
-                data=body_str,
-                timeout=self.timeout,
-            )
-            return ApiResponse.from_response(response)
-        except requests.RequestException as exception:
-            return ApiResponse.from_exception(exception)
+        """Make a POST request to the API."""
+        return self._request("POST", path, body)
 
     def _patch(self, path: str, body: dict) -> ApiResponse:
-        """
-        Make a PATCH request to the API.
-
-        Args:
-            path: API path
-            body: Request body as dictionary
-
-        Returns:
-            ApiResponse with status and data
-        """
-        body_str = json.dumps(body, separators=(",", ":"))
-        signature = self._generate_signature(body_str)
-        url = f"{self.base_url}{path}"
-
-        try:
-            response = requests.patch(
-                url,
-                headers=self._get_headers(signature, include_content_type=True),
-                data=body_str,
-                timeout=self.timeout,
-            )
-            return ApiResponse.from_response(response)
-        except requests.RequestException as exception:
-            return ApiResponse.from_exception(exception)
+        """Make a PATCH request to the API."""
+        return self._request("PATCH", path, body)
 
     def _delete(self, path: str, body: dict) -> ApiResponse:
-        """
-        Make a DELETE request to the API.
-
-        Args:
-            path: API path
-            body: Request body as dictionary
-
-        Returns:
-            ApiResponse with status and data
-        """
-        body_str = json.dumps(body, separators=(",", ":"))
-        signature = self._generate_signature(body_str)
-        url = f"{self.base_url}{path}"
-
-        try:
-            response = requests.delete(
-                url,
-                headers=self._get_headers(signature, include_content_type=True),
-                data=body_str,
-                timeout=self.timeout,
-            )
-            return ApiResponse.from_response(response)
-        except requests.RequestException as exception:
-            return ApiResponse.from_exception(exception)
+        """Make a DELETE request to the API."""
+        return self._request("DELETE", path, body)
 
     # =========================================================================
     # Member Endpoints
@@ -247,18 +200,29 @@ class ZenzapClient:
         """
         return self._get("/v2/members/me")
 
-    def list_members(self, limit: int = 50, cursor: Optional[str] = None) -> ApiResponse:
+    def list_members(
+        self,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+        emails: Optional[list[str]] = None,
+    ) -> ApiResponse:
         """
         List all members in the organization.
 
         Args:
             limit: Maximum number of members to return (default: 50)
             cursor: Pagination cursor for next page
+            emails: Filter by email addresses (comma-separated in query)
 
         Returns:
             ApiResponse with list of members
         """
-        path = self._build_path("/v2/members", {"limit": limit, "cursor": cursor})
+        params: dict[str, Any] = {
+            "limit": limit,
+            "cursor": cursor,
+            "emails": ",".join(emails) if emails is not None else None,
+        }
+        path = self._build_path("/v2/members", params)
         return self._get(path)
 
     # =========================================================================
@@ -286,13 +250,13 @@ class ZenzapClient:
         Returns:
             ApiResponse with created topic data including id, name, createdAt
         """
-        body = {
+        body: dict[str, Any] = {
             "name": name,
             "members": members,
         }
-        if description:
+        if description is not None:
             body["description"] = description
-        if external_id:
+        if external_id is not None:
             body["externalId"] = external_id
 
         return self._post("/v2/topics", body)
@@ -307,7 +271,7 @@ class ZenzapClient:
         Returns:
             ApiResponse with topic details
         """
-        return self._get(f"/v2/topics/{topic_id}")
+        return self._get(f"/v2/topics/{quote(topic_id, safe='')}")
 
     def get_topic_by_external_id(self, external_id: str) -> ApiResponse:
         """
@@ -363,7 +327,7 @@ class ZenzapClient:
         if description is not None:
             body["description"] = description
 
-        return self._patch(f"/v2/topics/{topic_id}", body)
+        return self._patch(f"/v2/topics/{quote(topic_id, safe='')}", body)
 
     def add_topic_members(self, topic_id: str, member_ids: list[str]) -> ApiResponse:
         """
@@ -376,7 +340,7 @@ class ZenzapClient:
         Returns:
             ApiResponse with result
         """
-        return self._post(f"/v2/topics/{topic_id}/members", {"memberIds": member_ids})
+        return self._post(f"/v2/topics/{quote(topic_id, safe='')}/members", {"memberIds": member_ids})
 
     def remove_topic_members(self, topic_id: str, member_ids: list[str]) -> ApiResponse:
         """
@@ -389,7 +353,49 @@ class ZenzapClient:
         Returns:
             ApiResponse with result
         """
-        return self._delete(f"/v2/topics/{topic_id}/members", {"memberIds": member_ids})
+        return self._delete(f"/v2/topics/{quote(topic_id, safe='')}/members", {"memberIds": member_ids})
+
+    def get_topic_messages(
+        self,
+        topic_id: str,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+        before: Optional[int] = None,
+        after: Optional[int] = None,
+        sender_id: Optional[str] = None,
+        order: Optional[str] = None,
+        include_system: Optional[bool] = None,
+        thread_id: Optional[str] = None,
+    ) -> ApiResponse:
+        """
+        Get messages from a topic with cursor-based pagination.
+
+        Args:
+            topic_id: UUID of the topic
+            limit: Maximum number of messages to return (1-100, default: 50)
+            cursor: Pagination cursor for next page
+            before: Only messages before this Unix timestamp (milliseconds)
+            after: Only messages after this Unix timestamp (milliseconds)
+            sender_id: Filter by sender UUID
+            order: Sort order ("asc" or "desc", default: "desc")
+            include_system: Include system messages (default: True)
+            thread_id: Filter by thread UUID
+
+        Returns:
+            ApiResponse with messages array, nextCursor, hasMore
+        """
+        params: dict[str, Any] = {
+            "limit": limit,
+            "cursor": cursor,
+            "before": before,
+            "after": after,
+            "senderId": sender_id,
+            "order": order,
+            "includeSystem": str(include_system).lower() if include_system is not None else None,
+            "threadId": thread_id,
+        }
+        path = self._build_path(f"/v2/topics/{quote(topic_id, safe='')}/messages", params)
+        return self._get(path)
 
     # =========================================================================
     # Message Endpoints
@@ -412,14 +418,51 @@ class ZenzapClient:
         Returns:
             ApiResponse with message data including id, topicId, createdAt
         """
-        body = {
+        body: dict[str, Any] = {
             "topicId": topic_id,
             "text": text,
         }
-        if external_id:
+        if external_id is not None:
             body["externalId"] = external_id
 
         return self._post("/v2/messages", body)
+
+    def add_reaction(self, message_id: str, reaction: str) -> ApiResponse:
+        """
+        Add an emoji reaction to a message.
+
+        Args:
+            message_id: UUID of the message
+            reaction: Emoji string to react with
+
+        Returns:
+            ApiResponse with reaction details
+        """
+        return self._post(f"/v2/messages/{quote(message_id, safe='')}/reactions", {"reaction": reaction})
+
+    def mark_message_delivered(self, message_id: str) -> ApiResponse:
+        """
+        Mark a message as delivered by the current bot.
+
+        Args:
+            message_id: UUID of the message
+
+        Returns:
+            ApiResponse with result
+        """
+        return self._post(f"/v2/messages/{quote(message_id, safe='')}/delivered", {})
+
+    def mark_message_read(self, message_id: str) -> ApiResponse:
+        """
+        Mark a message as read by the current bot.
+
+        Args:
+            message_id: UUID of the message
+
+        Returns:
+            ApiResponse with result
+        """
+        return self._post(f"/v2/messages/{quote(message_id, safe='')}/read", {})
 
     # =========================================================================
     # Task Endpoints
@@ -448,17 +491,173 @@ class ZenzapClient:
         Returns:
             ApiResponse with task data including id, topicId, title, createdAt
         """
-        body = {
+        body: dict[str, Any] = {
             "topicId": topic_id,
             "title": title,
         }
-        if description:
+        if description is not None:
             body["description"] = description
-        if assignee:
+        if assignee is not None:
             body["assignee"] = assignee
         if due_date is not None:
             body["dueDate"] = due_date
-        if external_id:
+        if external_id is not None:
             body["externalId"] = external_id
 
         return self._post("/v2/tasks", body)
+
+    def list_tasks(
+        self,
+        topic_id: Optional[str] = None,
+        status: Optional[str] = None,
+        assignee: Optional[str] = None,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+    ) -> ApiResponse:
+        """
+        List tasks visible to the bot with optional filtering.
+
+        Args:
+            topic_id: Filter by topic UUID
+            status: Filter by status ("Open" or "Done")
+            assignee: Filter by assignee UUID (empty string for unassigned)
+            limit: Maximum number of tasks to return (1-100, default: 50)
+            cursor: Pagination cursor for next page
+
+        Returns:
+            ApiResponse with tasks array, nextCursor, hasMore
+        """
+        params: dict[str, Any] = {
+            "limit": limit,
+            "cursor": cursor,
+            "topicId": topic_id,
+            "status": status,
+            "assignee": assignee,
+        }
+        path = self._build_path("/v2/tasks", params)
+        return self._get(path)
+
+    def get_task(self, task_id: str) -> ApiResponse:
+        """
+        Get a single task by ID.
+
+        Args:
+            task_id: UUID of the task
+
+        Returns:
+            ApiResponse with full task object
+        """
+        return self._get(f"/v2/tasks/{quote(task_id, safe='')}")
+
+    def update_task(
+        self,
+        task_id: str,
+        topic_id: Optional[str] = None,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        assignee: Optional[str] = None,
+        due_date: Optional[int] = None,
+        status: Optional[str] = None,
+    ) -> ApiResponse:
+        """
+        Update task fields via partial update.
+
+        Args:
+            task_id: UUID of the task
+            topic_id: UUID of the topic (required if status is provided)
+            title: New task title (max 256 characters)
+            description: New task description (max 10,000 characters)
+            assignee: UUID of member to assign (empty string to unassign)
+            due_date: Due date in milliseconds (0 to clear)
+            status: Task status ("Open" or "Done")
+
+        Returns:
+            ApiResponse with id and updatedAt
+        """
+        body: dict[str, Any] = {
+            k: v for k, v in {
+                "topicId": topic_id,
+                "title": title,
+                "description": description,
+                "assignee": assignee,
+                "dueDate": due_date,
+                "status": status,
+            }.items() if v is not None
+        }
+        return self._patch(f"/v2/tasks/{quote(task_id, safe='')}", body)
+
+    # =========================================================================
+    # Poll Endpoints
+    # =========================================================================
+
+    def create_poll(
+        self,
+        topic_id: str,
+        question: str,
+        options: list[str],
+        selection_type: str = "single",
+        anonymous: bool = False,
+    ) -> ApiResponse:
+        """
+        Create a poll in a topic.
+
+        Args:
+            topic_id: UUID of the topic
+            question: Poll question (max 500 characters)
+            options: List of option strings (2-10 items)
+            selection_type: "single" or "multiple" (default: "single")
+            anonymous: Whether votes are anonymous (default: False)
+
+        Returns:
+            ApiResponse with poll data including id, options (with server-generated IDs)
+        """
+        body: dict[str, Any] = {
+            "topicId": topic_id,
+            "question": question,
+            "options": options,
+            "selectionType": selection_type,
+            "anonymous": anonymous,
+        }
+        return self._post("/v2/polls", body)
+
+    def vote_on_poll(self, poll_id: str, option_id: str) -> ApiResponse:
+        """
+        Submit a vote on a poll on behalf of the bot.
+
+        Args:
+            poll_id: UUID of the poll
+            option_id: ID of the option to vote for (from poll options)
+
+        Returns:
+            ApiResponse with vote details
+        """
+        return self._post(f"/v2/polls/{quote(poll_id, safe='')}/votes", {"optionId": option_id})
+
+    # =========================================================================
+    # Long Polling Endpoints
+    # =========================================================================
+
+    def get_updates(
+        self,
+        offset: Optional[str] = None,
+        limit: int = 50,
+        timeout: int = 0,
+    ) -> ApiResponse:
+        """
+        Retrieve outbound events via long polling.
+
+        Args:
+            offset: Opaque offset from previous response
+            limit: Maximum number of updates (1-100, default: 50)
+            timeout: Long-poll timeout in seconds (0-30, default: 0)
+
+        Returns:
+            ApiResponse with updates array and nextOffset
+        """
+        params: dict[str, Any] = {
+            "limit": limit,
+            "timeout": timeout,
+            "offset": offset,
+        }
+        path = self._build_path("/v2/updates", params)
+        return self._get(path)

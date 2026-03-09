@@ -55,7 +55,7 @@ client = ZenzapClient(
 )
 response = client.list_members()
 if response.success:
-    for member in response.data:
+    for member in response.data.get('members', []):
         print(f\"{member['name']}: {member['id']}\")
 "
 ```
@@ -74,29 +74,45 @@ The Zenzap API uses two-factor authentication:
 
 1. **Bearer Token**: Your bot's API token in the `Authorization` header
 2. **HMAC Signature**: A SHA256 signature in the `X-Signature` header
+3. **Timestamp**: Unix timestamp in milliseconds in the `X-Timestamp` header
 
 ### Signature Generation
 
-- **GET requests**: Sign the full request path (including query string)
-- **POST/PATCH/DELETE requests**: Sign the JSON request body
+The signed payload is `{timestamp}.{data}` where data is:
+
+- **GET requests**: The full request path (including query string)
+- **POST/PATCH/DELETE requests**: The compact JSON request body
+
+Requests older than 5 minutes are rejected.
 
 ```python
 import hmac
 import hashlib
+import time
 
-def generate_signature(data: str, signing_key: str) -> str:
+def generate_signature(data: str, signing_key: str, timestamp: int) -> str:
+    payload = f"{timestamp}.{data}"
     return hmac.new(
         signing_key.encode("utf-8"),
-        data.encode("utf-8"),
+        payload.encode("utf-8"),
         hashlib.sha256
     ).hexdigest()
 
+timestamp = int(time.time() * 1000)
+
 # For GET request
-signature = generate_signature("/v2/topics", signing_key)
+signature = generate_signature("/v2/topics", signing_key, timestamp)
 
 # For POST request
-body = '{"name": "My Topic", "members": ["uuid"]}'
-signature = generate_signature(body, signing_key)
+body = '{"name":"My Topic","members":["uuid"]}'
+signature = generate_signature(body, signing_key, timestamp)
+
+# Headers for every request
+headers = {
+    "Authorization": f"Bearer {api_key}",
+    "X-Signature": signature,
+    "X-Timestamp": str(timestamp),
+}
 ```
 
 ## Examples
@@ -204,6 +220,7 @@ response = client.get_topic_by_external_id("project-123")
 | `get_topic_by_external_id(external_id)` | Get topic by external identifier |
 | `list_topics(limit, cursor)` | List topics where bot is a member |
 | `update_topic(topic_id, name, description)` | Update topic details |
+| `get_topic_messages(topic_id, limit, cursor, ...)` | Get messages from a topic |
 | `add_topic_members(topic_id, member_ids)` | Add members to topic |
 | `remove_topic_members(topic_id, member_ids)` | Remove members from topic |
 
@@ -212,12 +229,31 @@ response = client.get_topic_by_external_id("project-123")
 | Method | Description |
 |--------|-------------|
 | `send_message(topic_id, text, external_id)` | Send a message to a topic |
+| `add_reaction(message_id, reaction)` | Add an emoji reaction to a message |
+| `mark_message_delivered(message_id)` | Mark a message as delivered |
+| `mark_message_read(message_id)` | Mark a message as read |
 
 ### Tasks
 
 | Method | Description |
 |--------|-------------|
 | `create_task(topic_id, title, description, assignee, due_date, external_id)` | Create a task |
+| `list_tasks(topic_id, status, assignee, limit, cursor)` | List tasks with optional filters |
+| `get_task(task_id)` | Get task details by ID |
+| `update_task(task_id, topic_id, title, description, assignee, due_date, status)` | Update task fields |
+
+### Polls
+
+| Method | Description |
+|--------|-------------|
+| `create_poll(topic_id, question, options, selection_type, anonymous)` | Create a poll in a topic |
+| `vote_on_poll(poll_id, option_id)` | Vote on a poll |
+
+### Long Polling
+
+| Method | Description |
+|--------|-------------|
+| `get_updates(offset, limit, timeout)` | Retrieve outbound events via long polling |
 
 ## External IDs
 
